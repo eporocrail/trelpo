@@ -12,7 +12,7 @@ IPAddress decoder(192, 168, 2, decoderId);                   // IP address decod
 IPAddress gateway(192, 168, 2, 1);                           // IP address gateway
 IPAddress subnet(255, 255, 255, 0);                          // subnet masker
 
-static const byte addressSr = 71;                            // sensor address in Rocrail
+static const byte addressSr = 71;                            // sensor address in Rocrail. Fill Bus with "9".
 static const byte scanDelay = 50;                            // scan delay to receive tag number. default 50. larger than 100 useless
 static const int tagAmount = 3;                              // amount of tags
 static int releaseTime = 3000;                               // time before scanning next tag
