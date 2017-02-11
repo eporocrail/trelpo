@@ -295,7 +295,7 @@ void ReadTag() {
       if (EvalTag() == true) CheckTag();
       RFID.flush();                                      // stops multiple reads
     }
-  }
+  } else Serial.println(F("no reader !"))
 }  // end of ReadTag
 
 /*
