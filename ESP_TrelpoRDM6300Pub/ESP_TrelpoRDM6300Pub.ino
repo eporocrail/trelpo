@@ -1,6 +1,6 @@
 /*
 
-  This software constitutes an RFID reader based on the RDM6300 module. Suitable for reading glass tags.
+  This software constitutes an RFID reader based on the RDM6300 module.
   Target platform is the Wemos D1 mini module.
 
   ROCNET PROTOCOL
@@ -83,7 +83,19 @@
   --byte 8 Netto number of following data bytes.
 
   The Wemos module needs no 3.3V power supply. To the 5V pin external powersupply can be connected.
-  The RDM6300 module reqires 5V powersupply
+  The RDM6300 module requires 5V powersupply
+
+  Feed the TX pin of the RDM6300 module via a voltage divider circuit (two resistors) to the RX pin
+  of the Wemos module.
+
+  According to the datasheet of the RDM6300 the code of the tag is constituded by byte 1 .. 10 starting to count at 0
+  Opposed to using the MFC522 reader the data does not need to be converted to "HEXA"
+  Data is transferred to Rocrail and interpreted correctly as is.
+
+  Ensure that the antenne is as close to the tag as possible for better detection results.
+
+  In practice it might turn out to be necessary to switch the RDM6300 on and off as required
+  instead of have it switched on continuously.
 
 */
 
@@ -106,50 +118,51 @@ PubSubClient client(espClient);
 SoftwareSerial RFID(0, 2, false, 32);                        // D3 as RX, D4 as TX, no inversion, buffer length
 /*
   /////////////////////////////////////////// user adjustble variables /////////////////////////////////////////
-  static const char decoderId = 9;                           // also used in IP address decoder (check if IP address is available)
-  char wiFiHostname[] = "Trelpo-TO-009";                     // Hostname displayed in OTA port
-  static const char *ssid = "xxxxxxxx";                      // ssid WiFi network
-  static const char *password = "password";                  // password WiFi network
-  static const char *topicPub = "rocnet/rs";                 // rocnet/rs for sensor
-  static const char *topicSub = "rocnet/rs";                 // rocnet/rs for testing
-  static const char *MQTTclientId = (wiFiHostname);          // MQTT client Id, differs per decoder, to be set by user
+  static const char decoderId = 9;                             // also used in IP address decoder (check if IP address is available)
+  char wiFiHostname[] = "Trelpo-TO-009";                       // Hostname displayed in OTA port
+  static const char *ssid = "EPO";                             // ssid WiFi network
+  static const char *password = "!1PkwdrT8?";                  // password WiFi network
+  static const char *topicPub = "rocnet/rs";                   // rocnet/rs for sensor
+  static const char *topicSub = "rocnet/rs";                   // rocnet/ot for turnout control
+  static const char *MQTTclientId = (wiFiHostname);            // MQTT client Id, differs per decoder, to be set by user
 
-  IPAddress mosquitto(192, 168, 2, 193);                     // IP address Mosquitto
-  IPAddress decoder(192, 168, 2, decoderId);                 // IP address decoder
-  IPAddress gateway(192, 168, 2, 1);                         // IP address gateway
-  IPAddress subnet(255, 255, 255, 0);                        // subnet masker
+  IPAddress mosquitto(192, 168, 2, 193);                       // IP address Mosquitto
+  IPAddress decoder(192, 168, 2, decoderId);                   // IP address decoder
+  IPAddress gateway(192, 168, 2, 1);                           // IP address gateway
+  IPAddress subnet(255, 255, 255, 0);                          // subnet masker
 
-  static const byte addressSr = 71;                          // sensor address in Rocrail
-  static const byte scanDelay = 50;                          // scan delay to receive tag number. default 50. larger than 100 useless
-  static const int tagAmount = 3;                            // amount of tags
-  static int releaseTime = 3000;                             // time before releasing tag
-  static const int flashDuration = 100;                      // flash at tag recognition
+  static const byte addressSr = 71;                            // sensor address in Rocrail
+  static const byte scanDelay = 50;                            // scan delay to receive tag number. default 50. larger than 100 useless
+  static const int tagAmount = 3;                              // amount of tags
+  static int releaseTime = 3000;                               // time before scanning next tag
+  static const int flashDuration = 100;                        // flash at tag recognition
   static const byte LedPin = D1;
-  static boolean blankTag = false;                           // if true unknown tag is scanned and output to serial monitor
+  static boolean blankTag = true;                              // if true unknown tag is scanned and output to serial monitor
 
-  static byte tag[tagAmount][14] = {                         // tag numbers
-  {2, 48, 54, 48, 48, 52, 57, 57, 49, 54, 56, 66, 54, 3},    // keyfob for testing
-  {2, 48, 68, 48, 48, 52, 48, 54, 50, 70, 53, 68, 65, 3},    // keyfob for testing
-  {2, 48, 48, 48, 48, 48, 48, 48, 52, 54, 56, 54, 67, 3}     // glass tagg for testing
+  static byte tag[tagAmount][10] = {                           // tag numbers
+  {48, 54, 48, 48, 52, 57, 57, 49, 54, 56},    // keyfob for testing
+  {48, 68, 48, 48, 52, 48, 54, 50, 70, 53},    // keyfob for testing
+  {48, 48, 48, 48, 48, 48, 48, 52, 54, 56}     // glass tagg for testing
   };
-
-  static boolean debugFlag = true;                           // supports debugging
-  static boolean caseFlag = false;                           // controls display of control loop
+  static boolean debugFlag = true;                           // set on and off in setup
+  static boolean caseFlag = false;                           // controls display of control loop        // controls display of control loop
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 */
-static const int msgLength = 24;                      // message number of bytes
+static const int msgLength = 22;                      // message number of bytes
 static byte msgOut[msgLength];
 static byte msgIn[msgLength];
 
-static byte scanTag[14];                              // scanned tag
+static byte inTag[14];                                // scanned tag
+static byte scanTag[10];                              // scanned tag reduced to Tag Code
 static byte readByte = 0;                             // variable to read a single byte
 static byte recTag = 0;                               // recognised tag index nr
 static byte msgFlag = 0;                              // control message loop
 static byte control = 1;                              // controls program flow
+static byte displayCount = 0;                         // controls number of messages to serial monitor
 
-static boolean msgONSent=false;                       // message ON sent OK
-static boolean msgOFFSent=false;                      // message OFF sent OK
+static boolean msgONSent = false;                     // message ON sent OK
+static boolean msgOFFSent = false;                    // message OFF sent OK
 static boolean flashFlag = false;                     // start flasher
 static boolean scanReady = true;                      // access scanning
 
@@ -170,7 +183,7 @@ void setup() {
   msgOut[4] = decoderId;
   msgOut[5] = 8;
   msgOut[6] = 1;
-  msgOut[7] = 16;
+  msgOut[7] = (msgLength - 8);
   msgOut[8] = 0;
   msgOut[9] = 0;
   msgOut[11] = addressSr;
@@ -220,6 +233,7 @@ void loop() {
   switch (control) {
     case 1:
       if (debugFlag == true) CaseMelding();
+      displayCount = 0;
       if (recTag == 0) ReadTag();
       break;
     case 2:
@@ -236,7 +250,7 @@ void loop() {
     Reconnect();
   }
   client.loop();                                           // content of client.loop can not be moved to function
-  if (control == 0) {                                      // set control =0 to transmit message
+  if (control == 0) {                                      // set control = 0 to transmit message
     if (debugFlag == true) {
       Serial.print(F("Publish msg ["));
       Serial.print(topicPub);
@@ -252,17 +266,17 @@ void loop() {
         control = 1;
         break;
       case 1:
-        msgONSent = client.publish(topicPub, msgOut, 24);
+        msgONSent = client.publish(topicPub, msgOut, msgLength);
         if (msgONSent == false) Serial.println(F("fault publishing"));
         else control = 3;
         break;
       case 2:
-        msgOFFSent = client.publish(topicPub, msgOut, 24);
+        msgOFFSent = client.publish(topicPub, msgOut, msgLength);
         if (msgOFFSent == false) Serial.println(F("fault publishing"));
         else {
           recTag = 0;
           control = 1;
-          RFID.flush(); 
+          RFID.flush();
         }
         break;
     }
@@ -273,29 +287,36 @@ void loop() {
 /*
    readTag
 
-   function : scan tsg, print new tags, check validity tag, lookup tag
+   function : read tag, print new tags, check validity tag, convert to code, lookup tag
 
    called by: loop
-   calls    : EvalTag, checktag
+   calls    : EvalTag, Checktag
 
 */
 void ReadTag() {
-  if (RFID.available() > 0) {// read tag numbers
+  if (RFID.available() > 0) {
     if ( millis() > scanTime) {
       scanTime = millis() + scanDelay;
       for (byte index = 0 ; index < 14 ; index++) {      // read the tag
         readByte = RFID.read();
-        scanTag[index] = readByte;
+        inTag[index] = readByte;
       }
-      if (blankTag == true) {
-        Serial.println();
-        PrintTag();
-        Serial.println();
+      if (EvalTag() == true) {
+        if (blankTag == true) {
+          Serial.println();
+          PrintTag();
+          Serial.println();
+        }
+        CheckTag();
       }
-      if (EvalTag() == true) CheckTag();
       RFID.flush();                                      // stops multiple reads
+    } else {
+      if (displayCount < 1) {
+        Serial.println("No contact to reader!");
+        displayCount = 2;
+      }
     }
-  } else Serial.println(F("no reader !"))
+  }
 }  // end of ReadTag
 
 /*
@@ -336,13 +357,13 @@ void CheckTag() {
    called by: checktag
 
 */
-boolean CompareTag(byte scannedTag[14], byte knownTag[14]) {
+boolean CompareTag(byte scannedTag[10], byte knownTag[10]) {
   boolean match = false;
   byte byteCount = 0;
-  for (byte index = 0 ; index < 14 ; index++) {
+  for (byte index = 0 ; index < 10 ; index++) {
     if (scannedTag[index] == knownTag[index]) byteCount++;
   }
-  if (byteCount == 14) match = true;
+  if (byteCount == 10) match = true;
   return match;
 }  // end of CompareTag
 
@@ -355,9 +376,9 @@ boolean CompareTag(byte scannedTag[14], byte knownTag[14]) {
 
 */
 void PrintTag () {
-  for (byte index = 0 ; index < 14 ; index++) {
+  for (byte index = 0 ; index < 10 ; index++) {
     Serial.print (scanTag[index]);
-    if (index < 13) (Serial.print("."));
+    if (index < 9) (Serial.print("."));
   }
 }  //  end of PrintTag
 
@@ -372,9 +393,10 @@ void PrintTag () {
 */
 boolean EvalTag() {
   boolean eval = true;
-  if ((scanTag[0] = 2) && (scanTag[13] = 3)) {
+  if ((inTag[0] = 2) && (inTag[13] = 3)) {
     for (byte index = 1 ; index < 13 ; index++) {
-      if (scanTag[index] == 255) eval = false;
+      if (index < 11) scanTag[index - 1] = inTag[index];
+      if (inTag[index] == 255) eval = false;
     }
   }
   return eval;
@@ -427,18 +449,16 @@ void SendMsgOff() {
 
 */
 void MsgBody() {
-  msgOut[12] = tag[recTag - 1][1];
-  msgOut[13] = tag[recTag - 1][2];
-  msgOut[14] = tag[recTag - 1][3];
-  msgOut[15] = tag[recTag - 1][4];
-  msgOut[16] = tag[recTag - 1][5];
-  msgOut[17] = tag[recTag - 1][6];
-  msgOut[18] = tag[recTag - 1][7];
-  msgOut[19] = tag[recTag - 1][8];
-  msgOut[20] = tag[recTag - 1][9];
-  msgOut[21] = tag[recTag - 1][10];
-  msgOut[22] = tag[recTag - 1][11];
-  msgOut[23] = tag[recTag - 1][12];
+  msgOut[12] = tag[recTag - 1][0];
+  msgOut[13] = tag[recTag - 1][1];
+  msgOut[14] = tag[recTag - 1][2];
+  msgOut[15] = tag[recTag - 1][3];
+  msgOut[16] = tag[recTag - 1][4];
+  msgOut[17] = tag[recTag - 1][5];
+  msgOut[18] = tag[recTag - 1][6];
+  msgOut[19] = tag[recTag - 1][7];
+  msgOut[20] = tag[recTag - 1][8];
+  msgOut[21] = tag[recTag - 1][9];
 }
 
 /*
