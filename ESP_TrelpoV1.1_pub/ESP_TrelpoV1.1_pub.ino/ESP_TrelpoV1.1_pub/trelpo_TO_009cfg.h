@@ -2,8 +2,8 @@
 static const char decoderId = 9;                                    // also used in IP address decoder (check if IP address is available)
 static byte hardwareId = 2;                                         // 0: sensor 1: four turnouts 2: three turnouts with current detetction
 char wiFiHostname[] = "Trelpo-TO-009";                              // Hostname displayed in OTA port
-static const char *ssid = "EPO";                                    // ssid WiFi network
-static const char *password = "!1PkwdrT8?";                         // password WiFi network
+static const char *ssid = "XXX";                                    // ssid WiFi network
+static const char *password = "password";                         // password WiFi network
 static const char *topicPub1 = "rocnet/rs";                          // rocnet/rs for sensor
 static const char *topicPub2 = "rocnet/cf";                          // rocnet/rs for sensor
 static const char *topicSub1 = "rocnet/ot";                          // rocnet/ot for turnout control
