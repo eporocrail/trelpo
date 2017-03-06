@@ -49,8 +49,8 @@
 #include <ESP8266WiFi.h>
 
 char wiFiHostname[] = "ServoTool";                           // Hostname displayed in OTA port
-static const char *ssid = "XXX";                             // ssid WiFi network
-static const char *password = "password";                  // password WiFi network
+static const char *ssid = "EPO";                             // ssid WiFi network
+static const char *password = "!1PkwdrT8?";                  // password WiFi network
 static const char *topicPub = "rocnet/cf";                   // rocnet/rs for sensor
 static const char *topicSub = "rocnet/cf";                   // rocnet/ot for turnout control
 static const char *MQTTclientId = (wiFiHostname);            // MQTT client Id, differs per decoder, to be set by user

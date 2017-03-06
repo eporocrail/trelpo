@@ -42,6 +42,8 @@
     x = ~x;              // toggles ALL the bits in x.
 
 
+   Pin D3 and D4 have to be HIGH during booting otherwise the Wemos module DOES NOT BOOT !
+
 */
 
 #include <PubSubClient.h>
@@ -100,8 +102,8 @@ static byte sendNr = 1;
 static byte sendCntr = 0;
 
 static byte const switchNr = 7;
-static byte const dip[switchNr] = {D0, D1, D2, D3, D5, D6, D7};
-static byte const Led = D4;
+static byte const dip[switchNr] = {D0, D1, D4, D3, D5, D6, D7};
+static byte const Led = D2;
 static byte const ack = D8;
 static byte const potPin = A0;
 
