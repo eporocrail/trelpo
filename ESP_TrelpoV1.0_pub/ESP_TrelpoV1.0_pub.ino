@@ -23,9 +23,8 @@
   compatible with Arduino IDE.
   pins are active LOW.
 
-  All of the IO pins run at 3.3V:
-  For sensors all pins are high in No Detection (ND). Each sensor connects a pin to GND at detection(D).
-  No consequence for IO voltage.
+  All of the IO pins run at 3.3V: levelshifting or voltage dividers
+  
 
   For a relay a pin is followed by a transistor/IC. A relay is driven with 5V.
 
