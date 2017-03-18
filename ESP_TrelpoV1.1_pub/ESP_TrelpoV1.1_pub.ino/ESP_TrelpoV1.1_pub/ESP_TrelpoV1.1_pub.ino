@@ -34,9 +34,8 @@
   compatible with Arduino IDE.
   pins are active LOW.
 
-  All of the IO pins run at 3.3V:
-  For sensors all pins are high in No Detection (ND). Each sensor connects a pin to GND at detection(D).
-  No consequence for IO voltage.
+  All of the IO pins run at 3.3V: Level shifting or voltage dividers
+  
 
   For a relay a pin is followed by a transistor/IC. A relay is driven with 5V.
 
@@ -253,31 +252,30 @@ static byte msgIn[msgLength];
 static boolean forMe = false;                         // flag for handling incoming message
 static boolean firstMsg = true;                       // flag to throw away first message (dump from rocrail)
 
-static const byte turnoutNr = 3;                      // amount of turnouts differs per hardware id
-static const byte sensorNr = 2;                       // amount of sensor attached minus 1 for separate scanned pin A0
-static boolean order[turnoutNr];                      // orders sent by rocrail
-static boolean orderOld[turnoutNr];                   // old orders to detect changes
+
 
 // hardwareId = 0
-//static const byte sensor[sensorNr] = {D0, D1, D2, D3, D4, D5, D6, D7};     // sensor pins with each a pull-up resistor if hardwareId=0
-//static boolean sensorStatus[sensorNr];              // status sensor pins if hardwareId=0
-//static boolean sensorStatusOld[sensorNr];           // old status sensor pins if hardwareId=0
+static const byte sensorNr = 8;
+static const byte sensor[sensorNr] = {D0, D1, D2, D3, D4, D5, D6, D7};     // sensor pins with each a pull-up resistor if hardwareId=0
+static boolean sensorStatus[sensorNr];              // status sensor pins if hardwareId=0
+static boolean sensorStatusOld[sensorNr];           // old status sensor pins if hardwareId=0
 
 // hardwareId 1
 //static const byte servoPin[turnoutNr] = {D4, D5, D6, D7}; // servo pin number if hardwareId=1
 //static const byte relais[turnoutNr] =  {D0, D1, D2, D3};  // relais pin number if hardwareId=1
 
 // hardwareId = 2
+// static const byte sensorNr = 2;                       // amount of sensor attached minus 1 for separate scanned pin A0
+// static const byte sensor[sensorNr] = {D0, D1};        // sensor pins with each a pull-up resistor if hardwareId=2
+// static boolean sensorStatus[sensorNr + 1];            // status sensor pins if hardwareId=2
+// static boolean sensorStatusOld[sensorNr + 1];         // old status sensor pins if hardwareId=2
+
+static const byte turnoutNr = 3;                      // amount of turnouts differs per hardware id
+static boolean order[turnoutNr];                      // orders sent by rocrail
+static boolean orderOld[turnoutNr];                   // old orders to detect changes
 static const byte servoPin[turnoutNr] = {D5, D6, D7}; // servo pin number if hardwareId=2
 static const byte relais[turnoutNr] =  {D2, D3, D4};  // relais pin number if hardwareId=2
-static const byte sensor[sensorNr] = {D0, D1};        // sensor pins with each a pull-up resistor if hardwareId=2
-static boolean sensorStatus[sensorNr + 1];            // status sensor pins if hardwareId=2
-static boolean sensorStatusOld[sensorNr + 1];         // old status sensor pins if hardwareId=2
 
-
-static unsigned long sensorProcessTime = 0;           // sensor timer
-static int analogProcessTime = 0;                     // analog pin timer
-static int analogValue = 0;                           // value analog pin
 
 static String(turnoutOrder) = "";                     // used with debugging
 static unsigned int relaisSwitchPoint[turnoutNr];     // relais switch start time
@@ -308,6 +306,11 @@ static boolean thrownFlag = false;
 static byte servoPos1 = 0;
 static byte servoPos2 = 0;
 static boolean servoInverted[3];
+
+static unsigned long sensorProcessTime = 0;           // sensor timer
+static int analogProcessTime = 0;                     // analog pin timer
+static int analogValue = 0;                           // value analog pin
+
 ///////////////////////////////////////////////////////////////set-up//////////////////////////////
 void setup() {
 
