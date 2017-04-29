@@ -1,18 +1,19 @@
+
 /*
-  Trelpo v1.1
+  EltracoDecoder
 
-  Next to a configuration fore 8 sensors and 4 turnouts a third one is created. This one is a configuration of 3 turnouts with current detection.
+  In a single software package functionality is available for two decoders:
+  Turnout decoder with 4 extra sensors
+  Sensor decoder for 8 sensors.
 
-  Also the initialization of the turnouts is placed into the setup. Does not work.
-
-  Configuration has to be done outside setup. array indexes are constants.
+  Number of turnouts is controlling the program flow.
 
   March 2017 - Adding servo adjustment.
 
 
   /*************************************************************************************
 
-  Aim is to develop a turnout and signalling system for model railroad track control.
+  Aim is to develop a turnout and signaling system for model railroad track control.
   Communication is wireless.
 
   To disconnect the decoder from the controlling software in space and time the MOSQUITTO
@@ -24,7 +25,7 @@
 
 *********************************************************************************************
 
-  The decoder collects sensor information or activates relais and controls hobby RC servo's.
+  The decoder collects sensor information, activates relais and controls hobby RC servo's.
 
   Target platform is Wemos D1 mini.
 
@@ -34,26 +35,34 @@
   compatible with Arduino IDE.
   pins are active LOW.
 
-  All of the IO pins run at 3.3V: Level shifting or voltage dividers
-  
+  All of the IO pins run at 3.3V:
+  A levelshifter or voltage divider is needed.
 
   For a relay a pin is followed by a transistor/IC. A relay is driven with 5V.
 
-  In stead of having one module for all applications the design aims for different PCB's specific to task
+  In stead of having one hardware module for diffferent applications the design aims for two PCB's specific to task
   were the Wemos has to be slotted into.
 
   8 pins are used.
 
-  trelpo shield                 Function                                          Hardware ID
-  trelpo signalling shield      Detection 8 sensors                                   0 0
-  trelpo turnout shield         Controlling 4 turnouts                                0 1
+  trelpo decoder                 Function
+  trelpo sensor decoder          Scanning 8 sensors
+  trelpo turnout decoder         Controlling 1 turnout and scanning 4 extra sensors
+                                 Extra: ext button, ext LED, ext analogue sensor
 
   GPIO usage:
 
-  Hardware ID      pins        function
-  0 0            D0 .. D7    read contact
-  0 1            D0 .. D3    switch relay
-  0 1            D4 .. D7    PWM signal for servo
+  Shield        pins                function
+  Sensor         D0 .. D7           sensor
+  Turnout        D0                 Sensor 1
+                 D1                 ext LED
+                 D2                 current detection block
+                 D3, D4             sensor 2, 3
+                 D5                 PWM signal for servo
+                 D6                 relais
+                 D7                 current detection turnout
+                 D8                 ext button
+                 A0                 ext analogue sensor
 
   ROCNET PROTOCOL
 
@@ -129,8 +138,8 @@
 
   Actions
   code description data 1  data 2  data 3
-  0       off     type    value   address
-  1       on      type    value   address
+  0       off      type    value   address
+  1       on       type    value   address
 
   --byte 8 Netto number of following data bytes.
 
@@ -138,59 +147,52 @@
   To come to a reliable detection reaction a point sensor must be scanned at least 20 times per second in H0
   and at least 10 times per second in scale N.
 
-  For debouncing purpose a delay is built in into the processing of a sensor scan. This delay is adjustable.
   For scale H0 it should be not larger than 50 and for scale N not larger than 100.
   Default will be 20.
 
-  For each individual decoder a config file needs to be stored in the same directory as the main program.
-  For creation of another decoder only a new config file has to be created and than the program
-  can be compiled and uploaded
+  The Wemos Module needs no 3.3V power supply. To the 5V pin external powersupply can be connected.
 
-  For the decoder with three turnouts and current detection pinA0 has to be used.
-  It can be found that this pin only reads values up to 1V. Measurement revealed
-  that this pin operates at 3.3V also.
+  Addressing by Rocrail:
 
-  The Wemos Module needs no 3.3V power supply. To the 5V pin extenal powersupply can be connected.
+  Turnout decoder
+    The current detector of the turnout has to be the first sensor. The current detector of the block sensor 2.
+    S1, S2 and S3 are sensor 3, 4 and 5. (port numbers)
 
-  Scanning A0 in continuous loop disrupts WiFi. A pause between scans has to be applied. testing revealed that
-  times shorter than debounce time are sufficient. Apply debounce time as delay for scanning A0.
+  Table: Sensor tab Interface - the lower part of the IP-address is inserted into field "Bus"
+                                port number is inserted into field "Address"
+                                e.g. (192.168.0.32 current detector block is inserted as Bus 32 Address 2)
 
-  Servo adjustment is not implemented separately in Rocrail. For our purpose we define topic and messages.
+    All outputs of Rocrail are numbered consecutively. "Bus 9" is used to address outputs.
+    This also means that IP-address xxx.xxx.xxx.9 can not be used for a decoder.
 
-  Topic is: /rocnet/cf
+  Table: Switches tab Interface - "9" is inserted into field "Bus".
+                                  a unique number between 0 and 256 is inserted into field "Address"
 
-  Message structure:
-  byte 0: Servo address
-  byte 1: ServoPos    1 .. 180
-  byte 2: StraightAck       1
-  byte 3: ThrownAck         1
-  byte 4: Servo Adjusted    1
+  Sensor decoder
 
-  The address of the servo is contained in byte 0.
-  The servo position is published continuously with byte 1. If a position is acknowledged, byte 2 or byte 3 conveyes a "1".
-
-  After adjustment of both positions byte 4 is used to signal this to the servo tool.
-
-  The servo positions will be stored into EEPROM.
-
-  The EEPROM has 512 bytes. They are used each after each other.
+  Table: Sensor tab Interface - the lower part of the IP-address is inserted into field "Bus"
+                                port number is inserted into field "Address"
+                                e.g. (192.168.0.76 sensor 5 is inserted as Bus 76 Address 5)
 
 
   Author: E. Postma
 
-  March 2017
+  April 2017
 
 *****/
+#include <FS.h>                                                               //this needs to be first
 
 #include <PubSubClient.h>
 #include <Servo.h>
 #include <stdlib.h>
 #include <ESP8266mDNS.h>
-//#include <WiFiUdp.h>
+#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h>
 #include <EEPROM.h>
-#include "trelpo_TO_009cfg.h"         // decoder config file
 
 extern "C" {
 #include "user_interface.h"
@@ -199,120 +201,131 @@ extern "C" {
 Servo servo[4];
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+static char decoderId = 1;                                                   // also used in IP address decoder (check if IP address is available)
+static char wiFiHostname[] = "ELTRACO-TO-001 ";                              // Hostname displayed in OTA port
+static const char *ssid = "SSID";                                             // ssid WiFi network
+static const char *password = "PASSWRD";                                  // password WiFi network
+static const char *topicPub = "rocnet/rs";                                   // rocnet/rs for sensor
+static const char *topicSub1 = "rocnet/ot";                                  // rocnet/ot for turnout control
+static const char *topicSub2 = "rocnet/cf";                                  // rocnet/cf for servo configuration
+static const char *topicSub3 = "rocnet/rs";                                  // rocnet/rs for sensor
+static const char *MQTTclientId = (wiFiHostname);                            // MQTT client Id, differs per decoder, to be set by user
+
+IPAddress mosquitto(192, 168, 2, 254);                                       // IP address Mosquitto
+IPAddress _ip = IPAddress(192, 168, 2, decoderId);                           // IP address decoder
+IPAddress _gw = IPAddress(192, 168, 2, 1);                                   // IP address gateway
+IPAddress _sn = IPAddress(255, 255, 255, 0);                                 // subnet mask
+
+//////////////////////////////////////// decoder function selection ///////////////////////////////////////////////////
+// Sensor decoder
 /*
-  /////////////////////////////////////////// user adjustble variables /////////////////////////////////////////
-  static const char decoderId = 9;                                    // also used in IP address decoder (check if IP address is available)
-  static byte hardwareId = 2;                                         // 0: sensor 1: four turnouts 2: three turnouts with current detetction
-  char wiFiHostname[] = "Trelpo-TO-009";                              // Hostname displayed in OTA port
-  static const char *ssid = "XXX";                                    // ssid WiFi network
-  static const char *password = "pwd";                                // password WiFi network
-  static const char *topicPub = "rocnet/rs";                          // rocnet/rs for sensor
-  static const char *topicSub = "rocnet/ot";                          // rocnet/ot for turnout control
-  static const char *MQTTclientId = (wiFiHostname);                   // MQTT client Id, differs per decoder, to be set by user
 
-  IPAddress mosquitto(192, 168, 2, 193);                              // IP address Mosquitto
-  IPAddress decoder(192, 168, 2, decoderId);                          // IP address decoder
-  IPAddress gateway(192, 168, 2, 1);                                  // IP address gateway
-  IPAddress subnet(255, 255, 255, 0);                                 // subnet masker
-
-  // hardwareId = 0
-  //static const byte addressSr[8] = {71, 72, 73, 74, 75, 76, 77, 78}; // sensor addresses for sensor decoder,
-
-
-  // hardwareId = 1
-  /*
-  static const byte addressTu[4] = {57, 58, 59, 60};                // turnout addresses for 4 turnouts
-  static byte servoDelay[4] = {40, 40, 40, 40};                     // controls speed servo movement, higher is slower
-  static byte servoPos[4][2] = {                                    // pos straight, pos thrown
-  {10, 90},
-  {90, 160},
-  {75, 100},
-  {45, 141}
+  static const byte turnoutNr = 0;                                           // amount of turnouts differs per decoder type
+  const byte addressTu[turnoutNr] = {};                                      // turnout addresses for three turnouys with current detection
+  static const byte servoPin[turnoutNr] = {};                                // servo pin number
+  static byte servoPos[1][2] = {                                             // pos straight, pos thrown
+  {90, 90}
   };
-
-
-  // hardwareId = 2
-  static const byte addressTu[3] = {1, 2, 3};                       // turnout addresses for three turnouys with current detection
-  static const byte addressSr[3] = {71, 72, 73};                    // sensor addresses for three turnouts with current detection
-  static byte servoDelay[3] = {40, 40, 40};                         // controls speed servo movement, higher is slower
-  static byte servoPos[3][2] = {                                    // pos straight, pos thrown
-  {10, 90},
-  {90, 160},
-  {75, 100},
-  };
-  static boolean debugFlag = false;                                   // set on and off in setup
-  static boolean caseFlag = false;                                    // controls display of control loop
-
-  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  static const byte relais[turnoutNr] =  {};                                 // relais pin number
+  static byte servoDelay[1] = {40};                                          // controls speed servo movement, higher is slower
+  // sensor
+  static const byte sensorNr = 8;                                            // amount of sensors differs per decoder type
+  static const byte addressSr[sensorNr] = {1, 2, 3, 4, 5, 6, 7, 8};          // sensor addresses for sensor decoder,
+  static const byte sensor[sensorNr] = {D0, D1, D2, D3, D4, D5, D6, D7};     // sensor pins with each a pull-up resistor
 */
-static char *topicPub = "";
-static const int msgLength = 12;                      // message number of bytes
-static byte msgOut[msgLength];
-static byte msgIn[msgLength];
-static boolean forMe = false;                         // flag for handling incoming message
-static boolean firstMsg = true;                       // flag to throw away first message (dump from rocrail)
+// Turnout decoder
+
+static const byte turnoutNr = 1;                                            // amount of turnouts differs per decoder type
+static const byte addressTu[turnoutNr] = {1};                               // turnout addresses for three turnouys with current detection
+static const byte servoPin[turnoutNr] = {D5};                               // servo pin number
+static byte servoPos[turnoutNr][2] = {                                      // pos straight, pos thrown
+  {45, 135}
+};
+static const byte relais[turnoutNr] =  {D6};                                // relais pin number
+static byte servoDelay[turnoutNr] = {40};                                   // controls speed servo movement, higher is slower
+// sensor
+static const byte sensorNr = 5;                                             // amount of sensors differs per decoder type
+static const byte addressSr[sensorNr] = {1, 2, 3, 4, 5};                    // sensor addresses for three turnouts with current detection
+static const byte sensor[sensorNr] = {D7, D2, D0, D3, D4};                  // sensor pins with each a pull-up resistor
+
+static const byte ledPin = D1;                                              // not used but made available for the user
+static const byte buttonPin = D8;                                           // not used but made available for the user
+static const byte analoguePin = A0;                                         // not used but made available for the user
+
+//////////////////////////////////////// end of decoder function selection ///////////////////////////////////////////////////
+
+static const int msgLength = 12;                                           // message number of bytes
+static byte msgOut[msgLength];                                             // outgoing messages
+static byte msgIn[msgLength];                                              // incoming messages
+static boolean sendMsg = false;                                            // set true to publish message
+static boolean forMe = false;                                              // flag for handling incoming message
+static boolean firstMsg = true;                                            // flag to throw away first message (dump from rocrail)
+
+static boolean sensorStatus[sensorNr];                                     // status sensor pins
+static boolean sensorStatusOld[sensorNr];                                  // old status sensor pins
+static unsigned long sensorProcessTime[sensorNr];                          // sensor timer
+static byte sensorCountOff[sensorNr];                                      // counter negative sensor values
+static boolean scan = false;                                               // sensorvalue
+static const byte scanDelay = 5;                                           // delay in sensor scan processing
+static const byte scanNegativeNr = 5;                                      // number of negative scan values for negative sensorstatus
 
 
-
-// hardwareId = 0
-static const byte sensorNr = 8;
-static const byte sensor[sensorNr] = {D0, D1, D2, D3, D4, D5, D6, D7};     // sensor pins with each a pull-up resistor if hardwareId=0
-static boolean sensorStatus[sensorNr];              // status sensor pins if hardwareId=0
-static boolean sensorStatusOld[sensorNr];           // old status sensor pins if hardwareId=0
-
-// hardwareId 1
-//static const byte servoPin[turnoutNr] = {D4, D5, D6, D7}; // servo pin number if hardwareId=1
-//static const byte relais[turnoutNr] =  {D0, D1, D2, D3};  // relais pin number if hardwareId=1
-
-// hardwareId = 2
-// static const byte sensorNr = 2;                       // amount of sensor attached minus 1 for separate scanned pin A0
-// static const byte sensor[sensorNr] = {D0, D1};        // sensor pins with each a pull-up resistor if hardwareId=2
-// static boolean sensorStatus[sensorNr + 1];            // status sensor pins if hardwareId=2
-// static boolean sensorStatusOld[sensorNr + 1];         // old status sensor pins if hardwareId=2
-
-static const byte turnoutNr = 3;                      // amount of turnouts differs per hardware id
-static boolean order[turnoutNr];                      // orders sent by rocrail
-static boolean orderOld[turnoutNr];                   // old orders to detect changes
-static const byte servoPin[turnoutNr] = {D5, D6, D7}; // servo pin number if hardwareId=2
-static const byte relais[turnoutNr] =  {D2, D3, D4};  // relais pin number if hardwareId=2
-
-
-static String(turnoutOrder) = "";                     // used with debugging
-static unsigned int relaisSwitchPoint[turnoutNr];     // relais switch start time
-static unsigned int relaisSwitchDelay[turnoutNr];     // calculated relais switch time
-static boolean turnoutInit[turnoutNr];                // servo initiation flag
-static boolean movingStraight[turnoutNr];             // moving Straight
+static boolean order[turnoutNr];                                           // orders sent by rocrail
+static boolean orderOld[turnoutNr];                                        // old orders to detect changes
+static String(turnoutOrder) = "";                                          // used with debugging
+static unsigned int relaisSwitchPoint[turnoutNr];                          // relais switch start time
+static unsigned int relaisSwitchDelay[turnoutNr];                          // calculated relais switch time
+static boolean turnoutInit[turnoutNr];                                     // servo initiation flag
+static boolean movingStraight[turnoutNr];                                  // moving Straight
 static boolean movingStraightOld[turnoutNr];
-static boolean movingThrown[turnoutNr];               // moving Thrown
+static boolean movingThrown[turnoutNr];                                    // moving Thrown
 static boolean movingThrownOld[turnoutNr];
-static boolean msgMoveStart[turnoutNr];               // flag to control signalling message
-static boolean msgMoveStop[turnoutNr];                // flag to control signalling message
-static byte currentPosition[turnoutNr];               // servo position
-static byte targetPosition[turnoutNr];                // servo position to be reached
-static unsigned long servoMoveTime[turnoutNr];        // servo timer
-static boolean executedThrown[turnoutNr];             // order thrown execution flag
-static boolean executedStraight[turnoutNr];           // order straight execution
-static byte turnoutId = 0;
-static const byte debounce = 20;                      // delay in sensor scan processing
+static byte currentPosition[turnoutNr];                                    // servo position
+static byte targetPosition[turnoutNr];                                     // servo position to be reached
+static unsigned long servoMoveTime[turnoutNr];                             // servo timer
+static boolean executedThrown[turnoutNr];                                  // order thrown execution flag
+static boolean executedStraight[turnoutNr];                                // order straight execution
+static byte turnoutId = 0;                                                 // id turnout
 
-static byte control = 0;                              // controls statemachine
+static byte servoId = 0;                                                   // id servo
+static byte servoAngle = 0;                                                // angle servo
+static byte ackStraight = 0;                                               // ack straight
+static byte ackThrown = 0;                                                 // ack thrown
+static boolean straightFlag = false;                                       // control
+static boolean thrownFlag = false;                                         // control
+static byte servoPos1 = 0;                                                 // configuration servo straight position
+static byte servoPos2 = 0;                                                 // configuration servo thrown position
+static boolean servoInverted[1];                                           // if needed invert value of servo angle
 
-static byte servoId = 0;
-static byte servoAngle = 0;
-static byte ackStraight = 0;
-static byte ackThrown = 0;
-static boolean straightFlag = false;
-static boolean thrownFlag = false;
-static byte servoPos1 = 0;
-static byte servoPos2 = 0;
-static boolean servoInverted[3];
-
-static unsigned long sensorProcessTime = 0;           // sensor timer
-static int analogProcessTime = 0;                     // analog pin timer
-static int analogValue = 0;                           // value analog pin
-
+static boolean debugFlag = true;                                           // display debug messages
+static boolean configFlag = true;                                          // control servoconfiguration
 ///////////////////////////////////////////////////////////////set-up//////////////////////////////
 void setup() {
+  Serial.begin(9600);
+  Serial.println();
+  //  WiFi.hostname(wiFiHostname);                                        // both same effect, nodisplay on IP scanner
+  wifi_station_set_hostname(wiFiHostname);                                // but sets host name visibale on serial monitor (OTA)
+  //WiFiManager
+  //Local intialization. Once its business is done, there is no need to keep it around
+  WiFiManager wifiManager;
+
+  wifiManager.setSTAStaticIPConfig(_ip, _gw, _sn);
+  //tries to connect to last known settings
+  //if it does not connect it starts an access point with the specified name
+  //here  "trelpo" with password "loco"
+  //and goes into a blocking loop awaiting configuration
+  if (!wifiManager.autoConnect("trelpo", "loco")) {
+    Serial.println("failed to connect, reset and see if it connects");
+    delay(3000);
+    ESP.reset();
+    delay(5000);
+  }
+
+  Serial.println("Wifi connected");
+
+  Serial.println("local ip");
+  Serial.println(WiFi.localIP());
 
   EEPROM.begin(512);
   if ((EEPROM.read(255) == 0xFF) && (EEPROM.read(256) == 0xFF)) {                    //eeprom empty, first run
@@ -326,95 +339,62 @@ void setup() {
 
   ReadEEPROM();     //read the servo data
 
-  memset(sensorStatus, 0, sizeof(sensorStatus));
+  memset(sensorStatus, 0, sizeof(sensorStatus));                                  // initialising arrays sensor decoder
   memset(sensorStatusOld, 0, sizeof(sensorStatusOld));
-  memset(movingStraight, 0, sizeof(movingStraight));
-  memset(movingStraightOld, 0, sizeof(movingStraightOld));
-  memset(movingThrown, 0, sizeof(movingThrown));
-  memset(movingThrownOld, 0, sizeof(movingThrownOld));
-  memset(relaisSwitchPoint, 0, sizeof(relaisSwitchPoint));
-  memset(servoMoveTime, 0, sizeof(servoMoveTime));
-  memset(currentPosition, 0, sizeof(currentPosition));
-  memset(targetPosition, 0, sizeof(targetPosition));
-  memset(order, 0, sizeof(order));
-  memset(orderOld, 0, sizeof(orderOld));
+  memset(sensorProcessTime, 0, sizeof(sensorProcessTime));
   memset(msgOut, 0, sizeof(msgOut));
-  memset(turnoutInit, 0, sizeof(turnoutInit));
-  memset(msgMoveStart, 0, sizeof(msgMoveStart));
-  memset(msgMoveStop, 0, sizeof(msgMoveStop));
-  memset(relaisSwitchPoint, 0, sizeof(relaisSwitchPoint));
-  memset(relaisSwitchDelay, 0, sizeof(relaisSwitchDelay));
-  memset(executedThrown, 0, sizeof(executedThrown));
-  memset(executedStraight, 0, sizeof(executedStraight));
-  memset(servoInverted, 0, sizeof(servoInverted));
+  memset(msgIn, 0, sizeof(msgIn));
+  memset(sensorCountOff, 0, sizeof(sensorCountOff));
 
-  msgOut[2] = 1;
+  msgOut[2] = 1;                                                                 // intializing fixed content outgoing message
   msgOut[4] = decoderId;
   msgOut[5] = 8;
   msgOut[6] = 1;
   msgOut[7] = 4;
 
-  switch (hardwareId) {
-    case 0:
-      control = 1;                                           // control=1 is sensor loop
-      for (byte index = 0; index < sensorNr; index++) {
-        pinMode(sensor[index], INPUT_PULLUP);
-        digitalWrite(sensor[index], LOW);
-      }
-      break;
-
-    case 1:
-      control = 3;                                           // control=3 is loop for 4 turnouts
-      for (byte index = 0; index < turnoutNr ; index++) {
-        pinMode(relais[index], OUTPUT);
-        digitalWrite(relais[index], LOW);
-      }
-      for (byte index = 0; index < turnoutNr ; index++) {
-        relaisSwitchPoint[index] = ((servoPos[index][0] + servoPos[index][1]) / 2);
-      }
-      servo[0].attach (servoPin[0]);
-      servo[1].attach (servoPin[1]);
-      servo[2].attach (servoPin[2]);
-      servo[3].attach (servoPin[3]);
-      StartPosition();
-      break;
-
-    case 2:
-      control = 6;
-      for (byte index = 0; index < sensorNr; index++) {
-        pinMode(sensor[index], INPUT_PULLUP);
-        digitalWrite(sensor[index], LOW);
-      }
-      for (byte index = 0; index < turnoutNr ; index++) {
-        pinMode(relais[index], OUTPUT);
-        digitalWrite(relais[index], LOW);
-      }
-      for (byte index = 0; index < turnoutNr ; index++) {
-        relaisSwitchPoint[index] = ((servoPos[index][0] + servoPos[index][1]) / 2);
-      }
-      servo[0].attach (servoPin[0]);
-      servo[1].attach (servoPin[1]);
-      servo[2].attach (servoPin[2]);
-      StartPosition();
-      break;
-
-    case 9:
-      servo[0].attach (servoPin[0]);
-      servo[1].attach (servoPin[1]);
-      servo[2].attach (servoPin[2]);
-      break;
+  for (byte index = 0; index < sensorNr; index++) {                              // initialising sensor pins
+    pinMode(sensor[index], INPUT_PULLUP);
   }
 
-  Serial.begin(9600);
+  if (turnoutNr > 0) {
+    memset(movingStraight, 0, sizeof(movingStraight));                           // initialising extra arrays for turnout decoder
+    memset(movingStraightOld, 0, sizeof(movingStraightOld));
+    memset(movingThrown, 0, sizeof(movingThrown));
+    memset(movingThrownOld, 0, sizeof(movingThrownOld));
+    memset(relaisSwitchPoint, 0, sizeof(relaisSwitchPoint));
+    memset(relaisSwitchDelay, 0, sizeof(relaisSwitchDelay));
+    memset(executedThrown, 0, sizeof(executedThrown));
+    memset(executedStraight, 0, sizeof(executedStraight));
+    memset(servoMoveTime, 0, sizeof(servoMoveTime));
+    memset(currentPosition, 0, sizeof(currentPosition));
+    memset(targetPosition, 0, sizeof(targetPosition));
+    memset(order, 0, sizeof(order));
+    memset(orderOld, 0, sizeof(orderOld));
+    memset(turnoutInit, 0, sizeof(turnoutInit));
 
-  //WiFi.hostname(wiFiHostname);                  // both same effect, nodisplay on IP scanner
-  wifi_station_set_hostname(wiFiHostname);        // but sets host name visibale on serial monitor (OTA)
-  setup_wifi();
+    for (byte index = 0; index < turnoutNr ; index++) {                           // initialising relais pins
+      pinMode(relais[index], OUTPUT);
+      digitalWrite(relais[index], LOW);
+    }
+    for (byte index = 0; index < turnoutNr ; index++) {                           // initialising relais switch points
+      relaisSwitchPoint[index] = ((servoPos[index][0] + servoPos[index][1]) / 2);
+    }
+    for (byte index = 0; index < turnoutNr ; index++) {                           // attaching servos
+      servo[index].attach (servoPin[index]);
+    }
+    StartPosition();
+  }
+
+  WiFi.hostname(wiFiHostname);                                                    // both same effect, nodisplay on IP scanner
+  //wifi_station_set_hostname(wiFiHostname);                                      // but sets host name visibale on serial monitor (OTA)
+
+  client.setServer(mosquitto, 1883);
+  client.setCallback(callback);
 
   //// begin of OTA ////////
-  ArduinoOTA.setPort(8266);                       // Port defaults to 8266
-  ArduinoOTA.setHostname(wiFiHostname);           // Hostname defaults to esp8266-[ChipID]
-  //ArduinoOTA.setPassword((const char *)"123");  // No authentication by default
+  ArduinoOTA.setPort(8266);                                                      // Port defaults to 8266
+  ArduinoOTA.setHostname(wiFiHostname);                                          // Hostname defaults to esp8266-[ChipID]
+  //ArduinoOTA.setPassword((const char *)"123");                                 // No authentication by default
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
   });
@@ -434,117 +414,99 @@ void setup() {
   });
   ArduinoOTA.begin();
   ////// end of OTA ////////
-
-  client.setServer(mosquitto, 1883);
-  client.setCallback(callback);
-
-
 }
 ///////////////////////////////////////////////////////////////end of set-up////////////////////////
 /////////////////////////////////////////////////////////////// program loop ////////////////////////////////
 void loop() {
-  ArduinoOTA.handle();                                      // OTA handle must stay in loop
-  switch (control) {
-    case 1:
-      if (debugFlag == true) CaseMelding();
-      ScanSensor();
-      break;
-    case 3:
-      ServoInit();
-      if (debugFlag == true) CaseMelding();
-      break;
-    case 4:
-      ProcessOrder();
-      if (debugFlag == true) CaseMelding();
-      break;
+  ArduinoOTA.handle();                                                          // OTA handle must stay here in loop
 
-    case 5:
-      if (debugFlag == true) CaseMelding();
-      servoAdjust();
-      break;
-    case 7:
-      ScanSensor();
-      ScanA0();
-      ProcessOrder();
-      if (debugFlag == true) CaseMelding();
-      break;
-  }
-  if (!client.connected()) {                               // maintain connection with Mosquitto
+  if (configFlag == false) ServoAdjust();
+  ScanSensor();
+  if (turnoutNr > 0) ProcessOrder();
+
+  if (!client.connected()) {                                                   // maintain connection with Mosquitto
     reconnect();
   }
-  client.loop();                                           // content of client.loop can not be moved to function
-  if (control == 0) {                                      // set control =0 to transmit message
-    if (hardwareId < 9) {
-      if (client.publish(topicPub1, msgOut, 12) == true) {
-      } else Serial.println(F("fault publishing"));
-      if (debugFlag == true) {
-        Serial.print(F("Publish msg ["));
-        Serial.print(topicPub1);
-        Serial.print(F("] "));
-        for (int index = 0 ; index < 12 ; index++) {
-          Serial.print((msgOut[index]), DEC);
-          if (index < 12) Serial.print(F("."));
-        }
-        Serial.println();
+  client.loop();                                                               // content of client.loop can not be moved to function
+  if (sendMsg == true) {                                                       // set sendMsg = 0 to transmit message
+    if (debugFlag == true) {
+      Serial.print(F("Publish msg ["));
+      Serial.print(topicPub);
+      Serial.print(F(" - DEC] "));
+      for (int index = 0 ; index < msgLength ; index++) {
+        Serial.print((msgOut[index]), DEC);
       }
+      Serial.println();
     }
-    switch (hardwareId) {
-      case 0:
-        control = 1;
-        break;
-      case 1:
-        control = 4;
-        for (byte index = 0; index < turnoutNr; index++) {
-          msgMoveStop[index] = false;
-          msgMoveStart[index] = false;
-        }
-        break;
-      case 2:
-        control = 7;
-        for (byte index = 0; index < turnoutNr; index++) {
-          msgMoveStop[index] = false;
-          msgMoveStart[index] = false;
-        }
-        break;
-      case 9:
-        if (client.publish(topicPub2, msgOut, 5) == true) {
-        } else Serial.println(F("fault publishing"));
-        if (debugFlag == true) {
-          Serial.print(F("Publish msg ["));
-          Serial.print(topicPub2);
-          Serial.print(F("] "));
-          for (int index = 0 ; index < 5 ; index++) {
-            Serial.print((msgOut[index]), DEC);
-            if (index < 4) Serial.print(F("."));
-          }
-          Serial.println();
-        }
-        control = 5;
-        break;
-    }
+    if (client.publish(topicPub, msgOut, 12) != true) {                        // message is published
+      Serial.println(F("fault publishing"));
+    } else sendMsg = false;
   }
 }
-
 ///////////////////////////////////////////////////////////// end of program loop ///////////////////////
+/*
 
-void servoAdjust() {
-  servo[servoId].write(servoAngle);
+   ScanSensor
+
+   function : read status of input pins. adjust status of sensor, generate outgoing message,
+              sensorCountOff used to decide after how many scans "LOW" the sensor status is adjusted
+              required for current detector
+              set sendMsg = true to send message, set sendMsg = false for scan loop
+
+   called by: loop
+
+*/
+void ScanSensor() {
+  for (byte index = 0; index < sensorNr; index++) {
+    if ( millis() > sensorProcessTime[index]) {
+      sensorProcessTime[index] = millis() + scanDelay;
+      sensorStatusOld[index] = sensorStatus[index];
+      scan = !digitalRead(sensor[index]);
+      if (scan == false) {
+        sensorCountOff[index]++;
+      }
+      if (scan == true) {
+        sensorCountOff[index] = 0;
+        sensorStatus[index] = true;
+      }
+      if ((sensorCountOff[index]) > scanNegativeNr) {
+        sensorStatus[index] = false;
+      }
+      if ((sensorStatusOld[index]) != (sensorStatus[index])) {
+        sendMsg = true;
+        msgOut[10] = sensorStatus[index];
+        msgOut[11] = addressSr[index];
+      }
+    }
+  }
+} // end of Scansensor
+
+/*
+   ServoAdjust
+
+   function : adjust straight and thrown position of servo. positions sent by servo tool.
+
+   called by: loop
+
+*/
+void ServoAdjust() {
+  servo[servoId].write(servoAngle);                                              // servo takes position sent by servo tool
   if (ackStraight == 1) {
-    servoPos1 = servoAngle;
+    servoPos1 = servoAngle;                                                      // angle accepted when ack received
     straightFlag = true;
   }
   if (ackThrown == 1) {
-    servoPos2 = servoAngle;
+    servoPos2 = servoAngle;                                                      // angle accepted when ack received
     thrownFlag = true;
   }
   if ((straightFlag == true) && (thrownFlag == true)) {
     if (servoPos1 > servoPos2) {
-      //      servoInverted[servoId] = true;                       // adapt servo beweging
+      servoInverted[servoId] = true;                                             // smallest angle is stored first
       servoPos[servoId][0] = servoPos2;
       servoPos[servoId][1] = servoPos1;
-      servoPos[servoId][2] = 1;
+      servoPos[servoId][2] = 1;                                                  // if required, inverted is set
     } else {
-      //      servoInverted[servoId] = false;
+      servoInverted[servoId] = false;
       servoPos[servoId][0] = servoPos1;
       servoPos[servoId][1] = servoPos2;
       servoPos[servoId][2] = 0;
@@ -559,7 +521,7 @@ void servoAdjust() {
       Serial.print(servoPos[servoId][1]);
       Serial.println();
     }
-    EEPROM.write ((servoId * 3), servoPos[servoId][0]);
+    EEPROM.write ((servoId * 3), servoPos[servoId][0]);                         // write values in EEPROM
     EEPROM.write ((servoId * 3 + 1), servoPos[servoId][1]);
     EEPROM.write ((servoId * 3 + 2), servoPos[servoId][2]);
     EEPROM.commit();
@@ -567,18 +529,27 @@ void servoAdjust() {
     memset(msgOut, 0, sizeof(msgOut));
     msgOut[0] = addressTu[servoId];
     msgOut[4] = 1;
-    control = 0;
+    sendMsg == true;
     straightFlag = false;
     thrownFlag = false;
+    configFlag = true;
+    ReadEEPROM();
     if (debugFlag == true) {
       Serial.println();
       Serial.println("servo adjusted");
       Serial.println();
-      ReadEEPROM();
     }
   }
-}
+} //end of servoAdjust
 
+/*
+   WriteEEPROM
+
+   function : write initial servo values to EEPROM
+
+   called by: setup
+
+*/
 void WriteEEPROM() {
   byte val = 0;
   for (int index = 0; index < 3; index++) {
@@ -591,22 +562,19 @@ void WriteEEPROM() {
   }
   EEPROM.commit();
   delay(500);
-}
+} // end of WriteEEPROM
 
 /*
-  void ReadEEPROM() {
-  for (int index = 0; index < 6; index++) {
-    //Serial.print ("Servo - ");
-    //Serial.print (index/2);
-    Serial.println (EEPROM.read(index));
+   ReadEEPROM
 
-  }
-  }
+   function : read servo values from EEPROM
+
+   called by: setup, ServoAdjust
+
 */
-
 void ReadEEPROM() {
   if (debugFlag == true) Serial.println();
-  for (int index = 0; index < 3; index++) {
+  for (int index = 0; index < turnoutNr; index++) {
     if (debugFlag == true) {
       Serial.print("Servo nr: ");
       Serial.print(addressTu[index]);
@@ -622,70 +590,7 @@ void ReadEEPROM() {
       }
     }
   }
-}
-
-
-/*
-
-   ScanA0
-
-   function : scan sensor attached to pin A0
-
-   called by: loop
-
-*/
-void ScanA0() {
-  sensorStatusOld[2] = sensorStatus[2];
-  if ( millis() > analogProcessTime) {
-    analogValue = analogRead(A0);
-    analogProcessTime = millis() + debounce;
-  }
-  if (analogValue < 300) (sensorStatus[2] = HIGH);
-  else (sensorStatus[2] = LOW);
-  if (sensorStatus[2] != sensorStatusOld[2]) {
-    msgOut[10] = sensorStatus[2];
-    msgOut[11] = addressSr[2];
-    if ( millis() > sensorProcessTime) {
-      sensorProcessTime = millis() + debounce;
-      control = 0;
-    }
-  }
-  if (control == 0) {
-  } else control = 7;
-} // end of ScanA0
-
-/*
-
-   ScanSensor
-
-   function : read status of input pins. adjust status of sensor, generate outgoing message,
-              transmit messageafter debounce period, set control=0 to send message, set control=1 for scan loop
-
-   called by: loop
-
-*/
-void ScanSensor() {
-  for (byte index = 0; index < sensorNr; index++) {
-    sensorStatusOld[index] = sensorStatus[index];
-    sensorStatus[index] = !digitalRead(sensor[index]);
-    if (sensorStatusOld[index] != sensorStatus[index]) {
-      msgOut[10] = sensorStatus[index];
-      msgOut[11] = addressSr[index];
-      if ( millis() > sensorProcessTime) {
-        sensorProcessTime = millis() + debounce;
-        control = 0;
-      }
-    }
-    if (control == 0) {
-      break;
-    } else {
-      if (hardwareId == 0) {
-        control = 1;
-      } else control = 7;
-    }
-  }
-}
-// end of Scansensor
+} // end of ReadEEPROM
 
 /*
    ProcessOrder
@@ -696,7 +601,6 @@ void ScanSensor() {
    calls    : Thrown, Straight
 
 */
-
 void ProcessOrder() {
   for (byte index = 0; index < turnoutNr; index++) {
     if ((orderOld[index]) != (order[index])) {
@@ -714,7 +618,7 @@ void ProcessOrder() {
 
    function : move servo into thrown position
               check if order already executed, compare current servo position with ordered position, signal start servo movement
-              switch relais in middle of servo movement, signalend of movement, set flag order executed
+              switch relais in middle of servo movement, signal end of movement, set flag order executed
 
    called by: ProcessOrder
 
@@ -727,14 +631,10 @@ void Thrown(byte turnoutNr) {
     if ((currentPosition[turnoutNr]) != (servoPos[turnoutNr][1]) && millis() >= servoMoveTime[turnoutNr]) {
       movingThrownOld[turnoutNr] = movingThrown[turnoutNr];
       movingThrown[turnoutNr] = true;
-      if (servoPos[turnoutNr][3] == 0) servo[turnoutNr].write((currentPosition[turnoutNr]) + 1);
-      if (servoPos[turnoutNr][3] == 1) servo[turnoutNr].write((currentPosition[turnoutNr]) - 1);
+      servo[turnoutNr].write((currentPosition[turnoutNr]) + 1);
       servoMoveTime[turnoutNr] = millis() + servoDelay[turnoutNr];
       if ((movingThrownOld[turnoutNr]) != (movingThrown[turnoutNr])) {
-        if (msgMoveStart[turnoutNr] == false) {
-          txMsgMove(turnoutNr);
-          msgMoveStart[turnoutNr] = true;
-        }
+        txMsgMove(turnoutNr);
       }
       if ((currentPosition[turnoutNr]) == (relaisSwitchPoint[turnoutNr])) digitalWrite(relais[turnoutNr], HIGH);
     }
@@ -742,10 +642,7 @@ void Thrown(byte turnoutNr) {
       executedThrown[turnoutNr] = true;
       movingThrownOld[turnoutNr] = movingThrown[turnoutNr];
       movingThrown[turnoutNr] = false;
-      if (msgMoveStop[turnoutNr] == false) {
-        txMsgMoveStop(turnoutNr);
-        msgMoveStop[turnoutNr] = true;
-      }
+      txMsgMoveStop(turnoutNr);
     }
   }
 } // end of Thrown
@@ -754,7 +651,7 @@ void Thrown(byte turnoutNr) {
 
    function : move servo into straight position
               check if order already executed, compare current servo position with ordered position, signal start servo movement
-              switch relais in middle of servo movement, signalend of movement, set flag order executed
+              switch relais in middle of servo movement, signal end of movement, set flag order executed
 
    called by: ProcessOrder
 
@@ -767,14 +664,10 @@ void Straight(byte turnoutNr) {
     if ((currentPosition[turnoutNr]) != (servoPos[turnoutNr][0]) && millis() >= servoMoveTime[turnoutNr]) {
       movingStraightOld[turnoutNr] = movingStraight[turnoutNr];
       movingStraight[turnoutNr] = true;
-      if (servoPos[turnoutNr][3] == 0) servo[turnoutNr].write((currentPosition[turnoutNr]) - 1);
-      if (servoPos[turnoutNr][3] == 1) servo[turnoutNr].write((currentPosition[turnoutNr]) + 1);
+      servo[turnoutNr].write((currentPosition[turnoutNr]) - 1);
       servoMoveTime[turnoutNr] = millis() + servoDelay[turnoutNr];
       if ((movingStraightOld[turnoutNr]) != (movingStraight[turnoutNr])) {
-        if (msgMoveStart[turnoutNr] == false) {
-          txMsgMove(turnoutNr);
-          msgMoveStart[turnoutNr] = true;
-        }
+        txMsgMove(turnoutNr);
       }
       if ((currentPosition[turnoutNr]) == (relaisSwitchPoint[turnoutNr])) digitalWrite(relais[turnoutNr], LOW);
     }
@@ -782,10 +675,7 @@ void Straight(byte turnoutNr) {
       executedStraight[turnoutNr] = true;
       movingStraightOld[turnoutNr] = movingStraight[turnoutNr];
       movingStraight[turnoutNr] = false;
-      if (msgMoveStop[turnoutNr] == false) {
-        txMsgMoveStop(turnoutNr);
-        msgMoveStop[turnoutNr] = true;
-      }
+      txMsgMoveStop(turnoutNr);
     }
   }
 } // end of Straight
@@ -799,10 +689,9 @@ void Straight(byte turnoutNr) {
 
 */
 void txMsgMove(byte nr) {
-  msgMoveStart[nr] = true;
   msgOut[11] = addressSr[nr];
   msgOut[10] = 1;
-  control = 0;
+  sendMsg = true;
 } // end of txMsgMove
 
 /*
@@ -814,55 +703,17 @@ void txMsgMove(byte nr) {
 
 */
 void txMsgMoveStop(byte nr) {
-  msgMoveStop[nr] = true;
   msgOut[11] = addressSr[nr];
   msgOut[10] = 0;
-  control = 0;
-}
-
-/*
-   ServoInit()
-   function : move all servos one cycle. set servos in straight position. switch relais on and off.
-
-   called by: setup
-
-*/
-void ServoInit() {
-  for (turnoutId = 0; turnoutId < turnoutNr ; turnoutId++) {
-    if (turnoutInit[turnoutId] == false) {
-      currentPosition[turnoutId] = servo[turnoutId].read();
-      if ((currentPosition[turnoutId]) == (servoPos[turnoutId][0])) (targetPosition[turnoutId]) = (servoPos[turnoutId][1]);
-      if ((currentPosition[turnoutId]) == (servoPos[turnoutId][1])) (targetPosition[turnoutId]) = (servoPos[turnoutId][0]);
-      if ((currentPosition[turnoutId]) != (targetPosition[turnoutId]) && millis() >= servoMoveTime[turnoutId]) {
-        if ((currentPosition[turnoutId]) < (targetPosition[turnoutId])) {
-          servo[turnoutId].write((currentPosition[turnoutId]) + 1);
-          if ((currentPosition[turnoutId]) == (relaisSwitchPoint[turnoutId])) digitalWrite(relais[turnoutId], HIGH);
-        }
-        if ((currentPosition[turnoutId]) > (targetPosition[turnoutId])) {
-          servo[turnoutId].write((currentPosition[turnoutId]) - 1);
-          if ((currentPosition[turnoutId]) == (relaisSwitchPoint[turnoutId])) digitalWrite(relais[turnoutId], LOW);
-          if ((servo[turnoutId].read()) == (targetPosition[turnoutId])) {
-            turnoutInit[turnoutId] = true;
-            if ((turnoutInit[0]) == true && (turnoutInit[1]) == true && (turnoutInit[2]) == true) {
-              if (debugFlag == true) Serial.println("turnout initialization ready");
-              if (hardwareId == 1) {
-                control = 4;
-              } else control = 7;
-            }
-          }
-        }
-        servoMoveTime[turnoutId] = millis() + servoDelay[turnoutId];
-      }
-    }
-  }
-} // end of ServoInit()
+  sendMsg = true;
+} // end of txMsgMoveStop
 
 /*
 
    callback
 
    function : receive incoming message, test topic, test if message for me, suppres first message (some rocrail dump?)
-              calculate turnout number, store order, set execute flag tofalse, set control=4 into order processing loop
+              calculate turnout number, store order, set execute flag to false
 
 */
 void callback(char *topic, byte *payload, unsigned int length) {
@@ -876,15 +727,17 @@ void callback(char *topic, byte *payload, unsigned int length) {
       }
     }
     if (forMe == true) {
-      Serial.print("Message in [");
-      Serial.print(topic);
-      Serial.print("] ");
-      for (byte index = 0; index < length; index++) {
-        Serial.print(((char)payload[index]), DEC);
-        if (index < length - 1) Serial.print(".");
+      if (debugFlag == true) {
+        Serial.print("Message in [");
+        Serial.print(topic);
+        Serial.print("] ");
+        for (byte index = 0; index < length; index++) {
+          Serial.print(((char)payload[index]), DEC);
+          if (index < length - 1) Serial.print(F("."));
+        }
+        Serial.println();
       }
-      Serial.println();
-      hardwareId = 9;
+      configFlag = false;
       servoAngle = ((byte)payload[1]);
       ackStraight = ((byte)payload[2]);
       ackThrown = ((byte)payload[3]);
@@ -894,27 +747,25 @@ void callback(char *topic, byte *payload, unsigned int length) {
         ackStraight = 0;
         ackThrown = 0;
       }
-      control = 5;                                         // order processing loop
     }
   }
-
-
   if ((strncmp("rocnet/ot", topic, 9) == 0)) {
     forMe = false;                                        // check if address is contained in address array
     for (byte index = 0; index < turnoutNr; index++) {
       if (((byte)payload[11]) == (addressTu[index])) forMe = true;
     }
     if ((forMe == true) && (firstMsg == false)) {
-      Serial.print(F("Message in ["));
-      Serial.print(topic);
-      Serial.print(F("] "));
-      for (byte index = 0; index < length; index++) {
-        Serial.print(((char)payload[index]), DEC);
-        if (index < length - 1) Serial.print(F("."));
+      if (debugFlag == true) {
+        Serial.print(F("Message in ["));
+        Serial.print(topic);
+        Serial.print(F("] "));
+        for (byte index = 0; index < length; index++) {
+          Serial.print(((char)payload[index]), DEC);
+          if (index < length - 1) Serial.print(F("."));
+        }
+        Serial.println();
       }
-      Serial.println();
     }
-
     turnoutId = ((((byte)payload[11]) % 4) - 1);        // turnout number is calculated
     if (turnoutId == 255) {
       turnoutId = 3;
@@ -926,7 +777,6 @@ void callback(char *topic, byte *payload, unsigned int length) {
     } else {
       executedThrown[turnoutId] = false;
     }
-    control = 4;                                         // order processing loop
     ////////// debugging ///////
     if (debugFlag == true) {
       if ((order[turnoutId]) == 1) {
@@ -934,7 +784,7 @@ void callback(char *topic, byte *payload, unsigned int length) {
       } else {
         turnoutOrder = "straight";
       }
-      if (hardwareId == 1) {
+      if (turnoutNr > 0) {
         Serial.print(F("Message in ["));
         Serial.print(topic);
         Serial.print(F("] "));
@@ -951,32 +801,6 @@ void callback(char *topic, byte *payload, unsigned int length) {
 } // end of callback
 
 /*
-   setup_wifi
-
-   connect to network, install static IP address
-
-*/
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  WiFi.config(decoder, gateway, subnet);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println(F("WiFi connected"));
-  Serial.print(F("IP address: "));
-  Serial.println(WiFi.localIP());
-  Serial.print(F("hostname: "));
-  Serial.println(WiFi.hostname());
-}
-// end of setup_wifi
-
-/*
    re-establish connection with MWTTclientID.
    publish topic topicPub. subscribe to topic topicSub.
    when Mosquitto not available try again after 3 seconds
@@ -988,11 +812,10 @@ void reconnect() {
     // Attempt to connect
     if (client.connect(MQTTclientId)) {
       Serial.println("connected");
-      if (hardwareId == 9) *topicPub = *topicPub2;
-      if (hardwareId != 9) *topicPub = *topicPub1;
-      client.publish(topicPub, "connection established");      // Once connected, publish an announcement
-      client.subscribe(topicSub1, 1);                             // and resubscribe
-      client.subscribe(topicSub2, 1);                             // and resubscribe
+      client.publish(topicPub, "connection established");       // Once connected, publish an announcement
+      client.subscribe(topicSub1);                              // and resubscribe topic 1
+      client.subscribe(topicSub2);                              // and resubscribe topic 2
+      client.subscribe(topicSub3);                              // and resubscribe topic 3
     } else {
       Serial.print("no Broker");
       Serial.print(client.state());
@@ -1033,22 +856,4 @@ void Dbg (int val, String text) {
     Serial.println ("");
   }
 }  // end of Dbg
-
-/*
-   CaseMelding
-
-   function: trace trough control levels
-
-   debugging tool
-
-*/
-void CaseMelding() {
-  if (caseFlag == true) {
-    Serial.print ("we zijn in HWI: ");
-    Serial.print (hardwareId);
-    Serial.print (" in case: ");
-    Serial.print (control);
-    Serial.println();
-  }
-} // end of CaseMelding
 
